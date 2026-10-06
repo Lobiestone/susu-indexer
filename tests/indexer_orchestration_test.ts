@@ -403,7 +403,7 @@ Deno.test('a failed run records the failure and never advances the checkpoint', 
     // The acceptance criterion: the checkpoint is untouched, so the next run
     // retries the same range instead of skipping it.
     assertEquals(
-      stub.calls.filter((c) => c.table === 'indexer_checkpoints'),
+      stub.calls.filter((c) => c.table === 'indexer_checkpoints' && c.op !== 'select'),
       [],
     );
 
