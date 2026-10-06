@@ -97,6 +97,7 @@ class StubBuilder {
   #upsertIgnoreDuplicates = false;
   #insertRow: Row | null = null;
   #updateValues: Row | null = null;
+  #range: [number, number] | null = null;
 
   constructor(client: StubSupabaseClient, table: string) {
     this.#client = client;
@@ -111,6 +112,11 @@ class StubBuilder {
   }
 
   order(_column: string, _opts?: unknown): this {
+    return this;
+  }
+
+  range(from: number, to: number): this {
+    this.#range = [from, to];
     return this;
   }
 
@@ -198,7 +204,10 @@ class StubBuilder {
     this.#client.calls.push({ table: this.#table, op: mode });
     switch (mode) {
       case 'select': {
-        const rows = this.#client.rows(this.#table).filter((row) => this.#matches(row));
+        let rows = this.#client.rows(this.#table).filter((row) => this.#matches(row));
+        if (this.#range !== null) {
+          rows = rows.slice(this.#range[0], this.#range[1] + 1);
+        }
         if (this.#maybeSingle) return Promise.resolve({ data: rows[0] ?? null, error: null });
         return Promise.resolve({ data: rows, error: null });
       }
