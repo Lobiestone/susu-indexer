@@ -389,21 +389,33 @@ export class IndexerDb {
     ledgerTo: number;
     reason: string;
   }): Promise<void> {
-    const { error } = await this.#client.from('indexer_runs').insert({
-      correlation_id: params.correlationId,
-      ledger_from: params.ledgerFrom,
-      ledger_to: params.ledgerTo,
-      status: 'failed',
-      // Truncated: error text can be long, and never contains secrets by construction.
-      reason: params.reason.slice(0, 500),
-    });
+    try {
+      const { error } = await this.#client.from('indexer_runs').insert({
+        correlation_id: params.correlationId,
+        ledger_from: params.ledgerFrom,
+        ledger_to: params.ledgerTo,
+        status: 'failed',
+        // Truncated: error text can be long, and never contains secrets by construction.
+        reason: params.reason.slice(0, 500),
+      });
 
-    if (error) {
+      if (error) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            message: 'Failed to record indexer run failure',
+            correlationId: params.correlationId,
+            error: error.message,
+          }),
+        );
+      }
+    } catch (err) {
       console.error(
         JSON.stringify({
           level: 'error',
           message: 'Failed to record indexer run failure',
           correlationId: params.correlationId,
+          error: err instanceof Error ? err.message : String(err),
         }),
       );
     }
