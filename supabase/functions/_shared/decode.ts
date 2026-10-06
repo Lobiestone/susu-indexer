@@ -180,6 +180,10 @@ function asPayload(value: unknown): Record<string, unknown> | undefined {
  * an entire ledger range.
  */
 export function decodeChainEvent(raw: RpcEvent): DecodeResult {
+  if (raw.successful !== true) {
+    return fail('event from unsuccessful contract call');
+  }
+
   if (raw.topic.length < 2) {
     return fail(`expected at least 2 topics, got ${raw.topic.length}`);
   }

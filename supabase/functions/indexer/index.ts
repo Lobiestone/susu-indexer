@@ -197,8 +197,11 @@ export async function handleRequest(request: Request): Promise<Response> {
 
     // Both passes are deduplicated by chain identity, so the overlap that a
     // retried range can produce collapses to one write per event.
+    // Events from failed contract calls are never indexed (stellar.ts:35-42).
     const raw = dedupeByIdentity(
-      [...firstPass, ...secondPass].sort(compareEventOrder),
+      [...firstPass, ...secondPass]
+        .filter((event) => event.successful === true)
+        .sort(compareEventOrder),
       buildEventIdentity,
     );
     const secondDecoded = decodeChainEvents(secondPass);
