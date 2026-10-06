@@ -22,7 +22,7 @@
 
 import { authorizeInvocation } from '../_shared/auth.ts';
 import { canAdvanceCheckpoint, computeLedgerRange, ledgerLag } from '../_shared/checkpoint.ts';
-import { loadConfig } from '../_shared/config.ts';
+import { type IndexerConfig, loadConfig } from '../_shared/config.ts';
 import { type IndexedEventRow, IndexerDb } from '../_shared/db.ts';
 import { decodeChainEvents } from '../_shared/decode.ts';
 import { discoverGroups } from '../_shared/discovery.ts';
@@ -98,11 +98,22 @@ async function reconcileGroups(
   return divergences;
 }
 
-export async function handleRequest(request: Request): Promise<Response> {
+export type IndexerDeps = {
+  db?: IndexerDb;
+  rpc?: SorobanRpcClient;
+  config?: IndexerConfig;
+};
+
+export async function handleRequest(
+  request: Request,
+  deps?: IndexerDeps,
+): Promise<Response> {
   const correlationId = crypto.randomUUID();
   const logger = createLogger(correlationId);
 
-  const configResult = loadConfig();
+  const configResult = (deps && 'config' in deps && deps.config)
+    ? { ok: true as const, config: deps.config }
+    : loadConfig();
   if (!configResult.ok) {
     // Report which variables are problematic — never their values.
     const reason = `invalid configuration (missing: ${
@@ -120,8 +131,10 @@ export async function handleRequest(request: Request): Promise<Response> {
     return jsonResponse({ status: 'failed', correlationId, reason: 'unauthorized' }, 401);
   }
 
-  const db = new IndexerDb(config.supabaseUrl, config.serviceRoleKey);
-  const rpc = new SorobanRpcClient(config.rpcUrl);
+  const db = (deps && 'db' in deps && deps.db)
+    ? deps.db
+    : new IndexerDb(config.supabaseUrl, config.serviceRoleKey);
+  const rpc = (deps && 'rpc' in deps && deps.rpc) ? deps.rpc : new SorobanRpcClient(config.rpcUrl);
 
   try {
     const checkpoint = await withRetry(() => db.getCheckpoint(), RETRY);
@@ -276,16 +289,24 @@ export async function handleRequest(request: Request): Promise<Response> {
 
     // Record the failure for operators. The checkpoint is deliberately left
     // untouched so the same range is retried on the next run.
-    await db.recordRunFailure({
-      correlationId,
-      ledgerFrom: 0,
-      ledgerTo: 0,
-      reason,
-    });
+    try {
+      await db.recordRunFailure({
+        correlationId,
+        ledgerFrom: 0,
+        ledgerTo: 0,
+        reason,
+      });
+    } catch (recordError) {
+      logger.error('Failed to record run failure in database', {
+        error: recordError instanceof Error ? recordError.message : String(recordError),
+      });
+    }
 
     return jsonResponse({ status: 'failed', correlationId, reason }, 500);
   }
 }
 
 // Supabase Edge Functions run this module as the request handler.
-Deno.serve(handleRequest);
+if (import.meta.main) {
+  Deno.serve((request) => handleRequest(request));
+}

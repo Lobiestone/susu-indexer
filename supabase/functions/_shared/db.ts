@@ -47,8 +47,8 @@ export type IndexedEventRow = {
 export class IndexerDb {
   #client: SupabaseClient;
 
-  constructor(supabaseUrl: string, serviceRoleKey: string) {
-    this.#client = createClient(supabaseUrl, serviceRoleKey, {
+  constructor(supabaseUrl: string, serviceRoleKey: string, client?: SupabaseClient) {
+    this.#client = client ?? createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
   }
@@ -383,21 +383,33 @@ export class IndexerDb {
     ledgerTo: number;
     reason: string;
   }): Promise<void> {
-    const { error } = await this.#client.from('indexer_runs').insert({
-      correlation_id: params.correlationId,
-      ledger_from: params.ledgerFrom,
-      ledger_to: params.ledgerTo,
-      status: 'failed',
-      // Truncated: error text can be long, and never contains secrets by construction.
-      reason: params.reason.slice(0, 500),
-    });
+    try {
+      const { error } = await this.#client.from('indexer_runs').insert({
+        correlation_id: params.correlationId,
+        ledger_from: params.ledgerFrom,
+        ledger_to: params.ledgerTo,
+        status: 'failed',
+        // Truncated: error text can be long, and never contains secrets by construction.
+        reason: params.reason.slice(0, 500),
+      });
 
-    if (error) {
+      if (error) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            message: 'Failed to record indexer run failure',
+            correlationId: params.correlationId,
+            error: error.message,
+          }),
+        );
+      }
+    } catch (thrown) {
       console.error(
         JSON.stringify({
           level: 'error',
           message: 'Failed to record indexer run failure',
           correlationId: params.correlationId,
+          error: thrown instanceof Error ? thrown.message : String(thrown),
         }),
       );
     }
