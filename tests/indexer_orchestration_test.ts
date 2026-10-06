@@ -84,7 +84,7 @@ class StubSupabaseClient {
   }
 }
 
-type Filter = { column: string; op: 'eq' | 'in'; value: unknown };
+type Filter = { column: string; op: 'eq' | 'in' | 'lt'; value: unknown };
 
 class StubBuilder {
   #client: StubSupabaseClient;
@@ -104,12 +104,23 @@ class StubBuilder {
   }
 
   select(_columns: string): this {
-    this.#mode = 'select';
+    if (this.#mode !== 'update') {
+      this.#mode = 'select';
+    }
+    return this;
+  }
+
+  order(_column: string, _opts?: unknown): this {
     return this;
   }
 
   eq(column: string, value: unknown): this {
     this.#filters.push({ column, op: 'eq', value });
+    return this;
+  }
+
+  lt(column: string, value: unknown): this {
+    this.#filters.push({ column, op: 'lt', value });
     return this;
   }
 
@@ -163,6 +174,7 @@ class StubBuilder {
     return this.#filters.every((filter) => {
       const value = row[filter.column];
       if (filter.op === 'eq') return value === filter.value;
+      if (filter.op === 'lt') return Number(value) < Number(filter.value);
       return (filter.value as unknown[]).includes(value);
     });
   }
@@ -212,7 +224,7 @@ class StubBuilder {
       case 'update': {
         const matched = this.#client.rows(this.#table).filter((row) => this.#matches(row));
         for (const row of matched) Object.assign(row, this.#updateValues);
-        return Promise.resolve({ error: null, count: matched.length });
+        return Promise.resolve({ error: null, data: matched, count: matched.length });
       }
     }
   }
