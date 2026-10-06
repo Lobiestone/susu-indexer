@@ -291,12 +291,18 @@ export async function handleRequest(
 
     // Record the failure for operators. The checkpoint is deliberately left
     // untouched so the same range is retried on the next run.
-    await db.recordRunFailure({
-      correlationId,
-      ledgerFrom: 0,
-      ledgerTo: 0,
-      reason,
-    });
+    try {
+      await db.recordRunFailure({
+        correlationId,
+        ledgerFrom: 0,
+        ledgerTo: 0,
+        reason,
+      });
+    } catch (recordError) {
+      logger.error('Failed to record run failure in database', {
+        reason: recordError instanceof Error ? recordError.message : String(recordError),
+      });
+    }
 
     return jsonResponse({ status: 'failed', correlationId, reason }, 500);
   }

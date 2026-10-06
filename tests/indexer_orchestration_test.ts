@@ -461,7 +461,7 @@ Deno.test('IndexerDb.upsertGroupState throws when the group has no row', async (
   );
 });
 
-Deno.test('IndexerDb.recordRunFailure never throws', async () => {
+Deno.test('IndexerDb.recordRunFailure never throws on error response', async () => {
   const { stub, db } = makeDeps([], SCENARIO_HEAD);
   stub.errorOn = { table: 'indexer_runs', op: 'insert' };
 
@@ -471,4 +471,36 @@ Deno.test('IndexerDb.recordRunFailure never throws', async () => {
     ledgerTo: 2,
     reason: 'boom',
   });
+});
+
+Deno.test('IndexerDb.recordRunFailure never rejects when insert rejects', async () => {
+  const { stub, db } = makeDeps([], SCENARIO_HEAD);
+  stub.failOn = { table: 'indexer_runs', op: 'insert' };
+
+  await db.recordRunFailure({
+    correlationId: 'test',
+    ledgerFrom: 1,
+    ledgerTo: 2,
+    reason: 'network down',
+  });
+});
+
+Deno.test('handleRequest returns structured 500 even when recordRunFailure insert rejects', async () => {
+  const restoreEnv = withTestEnv();
+  try {
+    const { stub, db } = makeDeps([], SCENARIO_HEAD);
+    const rpc: RpcSource = {
+      getLatestLedger: () => Promise.resolve(SCENARIO_HEAD),
+      getEvents: () => Promise.reject(new Error('RPC endpoint unavailable')),
+    };
+    stub.failOn = { table: 'indexer_runs', op: 'insert' };
+
+    const response = await handleRequest(authorizedRequest(), { db, rpc });
+    assertEquals(response.status, 500);
+    const body = await response.json();
+    assertEquals(body.status, 'failed');
+    assertEquals(body.reason, 'RPC endpoint unavailable');
+  } finally {
+    restoreEnv();
+  }
 });
