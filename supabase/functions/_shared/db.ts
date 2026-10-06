@@ -107,17 +107,41 @@ export class IndexerDb {
    *
    * This is the watch list: a group's events are emitted by its own contract,
    * so without these the indexer would see only the Factory. The set grows with
-   * every group deployed, which is fine at this scale and revisit-worthy beyond
-   * it — the RPC takes the whole list as a filter on every page.
+   * every group deployed. Pages through groups in batches using .range() so lists
+   * larger than PostgREST's max-rows cap (typically 1000) are not truncated.
    */
-  async listGroupContractIds(): Promise<string[]> {
-    const { data, error } = await this.#client.from('groups').select('contract_id');
+  async listGroupContractIds(pageSize = 1000): Promise<string[]> {
+    const contractIds: string[] = [];
+    let from = 0;
 
-    if (error) {
-      throw new Error(`Failed to read indexed group contracts: ${error.message}`);
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await this.#client
+        .from('groups')
+        .select('contract_id')
+        .order('contract_id', { ascending: true })
+        .range(from, to);
+
+      if (error) {
+        throw new Error(`Failed to read indexed group contracts: ${error.message}`);
+      }
+
+      if (!data || data.length === 0) {
+        break;
+      }
+
+      for (const row of data) {
+        contractIds.push(String(row.contract_id));
+      }
+
+      if (data.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
     }
 
-    return (data ?? []).map((row) => String(row.contract_id));
+    return contractIds;
   }
 
   /**
