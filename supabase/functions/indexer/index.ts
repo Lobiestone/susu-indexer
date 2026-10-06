@@ -22,7 +22,7 @@
 
 import { authorizeInvocation } from '../_shared/auth.ts';
 import { canAdvanceCheckpoint, computeLedgerRange, ledgerLag } from '../_shared/checkpoint.ts';
-import { loadConfig } from '../_shared/config.ts';
+import { type IndexerConfig, loadConfig } from '../_shared/config.ts';
 import { type IndexedEventRow, IndexerDb } from '../_shared/db.ts';
 import { decodeChainEvents } from '../_shared/decode.ts';
 import { discoverGroups } from '../_shared/discovery.ts';
@@ -109,7 +109,7 @@ async function reconcileGroups(
 
 export async function handleRequest(
   request: Request,
-  deps: { db?: IndexerDb; rpc?: RpcSource } = {},
+  deps: { db?: IndexerDb; rpc?: RpcSource; config?: IndexerConfig } = {},
 ): Promise<Response> {
   const correlationId = crypto.randomUUID();
   const logger = createLogger(correlationId);
