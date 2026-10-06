@@ -8,9 +8,11 @@
  */
 
 import { assertEquals } from '@std/assert';
+import { decodeChainEvents } from '../supabase/functions/_shared/decode.ts';
 import { buildEventIdentity } from '../supabase/functions/_shared/events.ts';
 import { planIngest } from '../supabase/functions/_shared/ingest.ts';
-import { allEvents, decodeOk, FACTORY_ID, GROUP_ID } from './fixture.ts';
+import type { RpcEvent } from '../supabase/functions/_shared/stellar.ts';
+import { allEvents, decodeOk, FACTORY_ID, GROUP_ID, groupEvents } from './fixture.ts';
 
 const decoded = allEvents.map(decodeOk);
 const plan = planIngest(decoded);
@@ -195,4 +197,30 @@ Deno.test('amounts survive the projection as exact strings', () => {
   for (const row of plan.contributions) assertEquals(typeof row.amount, 'string');
   for (const row of plan.payouts) assertEquals(typeof row.recipient_amount, 'string');
   for (const row of plan.fees) assertEquals(typeof row.fee, 'string');
+});
+
+Deno.test('a failed contribution or payout produces no rows in decoded or fact tables', () => {
+  const contribEvent = groupEvents.find((e) => decodeOk(e).name === 'contribution');
+  if (contribEvent === undefined) throw new Error('no contribution in fixture');
+
+  const failedContrib: RpcEvent = { ...contribEvent, successful: false };
+  const decodedContribBatch = decodeChainEvents([failedContrib]);
+  assertEquals(decodedContribBatch.events, []);
+  assertEquals(decodedContribBatch.rejected.length, 1);
+
+  const contribPlan = planIngest(decodedContribBatch.events);
+  assertEquals(contribPlan.decoded.length, 0);
+  assertEquals(contribPlan.contributions.length, 0);
+
+  const payoutEvent = groupEvents.find((e) => decodeOk(e).name === 'payout');
+  if (payoutEvent === undefined) throw new Error('no payout in fixture');
+
+  const failedPayout: RpcEvent = { ...payoutEvent, successful: false };
+  const decodedPayoutBatch = decodeChainEvents([failedPayout]);
+  assertEquals(decodedPayoutBatch.events, []);
+  assertEquals(decodedPayoutBatch.rejected.length, 1);
+
+  const payoutPlan = planIngest(decodedPayoutBatch.events);
+  assertEquals(payoutPlan.decoded.length, 0);
+  assertEquals(payoutPlan.payouts.length, 0);
 });

@@ -47,10 +47,16 @@ export type IndexedEventRow = {
 export class IndexerDb {
   #client: SupabaseClient;
 
-  constructor(supabaseUrl: string, serviceRoleKey: string) {
-    this.#client = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
+  /**
+   * An explicit client may be injected for tests, so the orchestration can be
+   * exercised against a stub instead of a live database. Production callers
+   * omit it and get the service-role client as before.
+   */
+  constructor(supabaseUrl: string, serviceRoleKey: string, client?: SupabaseClient) {
+    this.#client = client ??
+      createClient(supabaseUrl, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
   }
 
   /**
@@ -101,17 +107,41 @@ export class IndexerDb {
    *
    * This is the watch list: a group's events are emitted by its own contract,
    * so without these the indexer would see only the Factory. The set grows with
-   * every group deployed, which is fine at this scale and revisit-worthy beyond
-   * it — the RPC takes the whole list as a filter on every page.
+   * every group deployed. Pages through groups in batches using .range() so lists
+   * larger than PostgREST's max-rows cap (typically 1000) are not truncated.
    */
-  async listGroupContractIds(): Promise<string[]> {
-    const { data, error } = await this.#client.from('groups').select('contract_id');
+  async listGroupContractIds(pageSize = 1000): Promise<string[]> {
+    const contractIds: string[] = [];
+    let from = 0;
 
-    if (error) {
-      throw new Error(`Failed to read indexed group contracts: ${error.message}`);
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await this.#client
+        .from('groups')
+        .select('contract_id')
+        .order('contract_id', { ascending: true })
+        .range(from, to);
+
+      if (error) {
+        throw new Error(`Failed to read indexed group contracts: ${error.message}`);
+      }
+
+      if (!data || data.length === 0) {
+        break;
+      }
+
+      for (const row of data) {
+        contractIds.push(String(row.contract_id));
+      }
+
+      if (data.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
     }
 
-    return (data ?? []).map((row) => String(row.contract_id));
+    return contractIds;
   }
 
   /**
@@ -420,21 +450,33 @@ export class IndexerDb {
     ledgerTo: number;
     reason: string;
   }): Promise<void> {
-    const { error } = await this.#client.from('indexer_runs').insert({
-      correlation_id: params.correlationId,
-      ledger_from: params.ledgerFrom,
-      ledger_to: params.ledgerTo,
-      status: 'failed',
-      // Truncated: error text can be long, and never contains secrets by construction.
-      reason: params.reason.slice(0, 500),
-    });
+    try {
+      const { error } = await this.#client.from('indexer_runs').insert({
+        correlation_id: params.correlationId,
+        ledger_from: params.ledgerFrom,
+        ledger_to: params.ledgerTo,
+        status: 'failed',
+        // Truncated: error text can be long, and never contains secrets by construction.
+        reason: params.reason.slice(0, 500),
+      });
 
-    if (error) {
+      if (error) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            message: 'Failed to record indexer run failure',
+            correlationId: params.correlationId,
+            error: error.message,
+          }),
+        );
+      }
+    } catch (err) {
       console.error(
         JSON.stringify({
           level: 'error',
           message: 'Failed to record indexer run failure',
           correlationId: params.correlationId,
+          error: err instanceof Error ? err.message : String(err),
         }),
       );
     }

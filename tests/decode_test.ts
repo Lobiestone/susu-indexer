@@ -9,6 +9,7 @@
 
 import { assertEquals, assertNotEquals } from '@std/assert';
 import { decodeChainEvent, decodeChainEvents } from '../supabase/functions/_shared/decode.ts';
+import type { RpcEvent } from '../supabase/functions/_shared/stellar.ts';
 import {
   allEvents,
   decodeOk,
@@ -190,4 +191,57 @@ Deno.test('a rejected event does not discard the rest of its batch', () => {
   assertEquals(rejected.length, 1);
   assertEquals(rejected[0]?.eventId, base.id);
   assertEquals(events.length, groupEvents.length);
+});
+
+Deno.test('an event from an unsuccessful contract call is rejected', () => {
+  const contribution = groupEvents.find((e) => decodeOk(e).name === 'contribution');
+  if (contribution === undefined) throw new Error('no contribution event in fixture');
+
+  const failedContribution: RpcEvent = { ...contribution, successful: false };
+  const contribResult = decodeChainEvent(failedContribution);
+  assertEquals(contribResult.ok, false);
+  if (!contribResult.ok) {
+    assertEquals(contribResult.reason.includes('unsuccessful contract call'), true);
+  }
+
+  const payout = groupEvents.find((e) => decodeOk(e).name === 'payout');
+  if (payout === undefined) throw new Error('no payout event in fixture');
+
+  const failedPayout: RpcEvent = { ...payout, successful: false };
+  const payoutResult = decodeChainEvent(failedPayout);
+  assertEquals(payoutResult.ok, false);
+  if (!payoutResult.ok) {
+    assertEquals(payoutResult.reason.includes('unsuccessful contract call'), true);
+  }
+});
+
+Deno.test('decodeChainEvents excludes unsuccessful events and counts them in rejected', () => {
+  const contribution = groupEvents.find((e) => decodeOk(e).name === 'contribution');
+  if (contribution === undefined) throw new Error('no contribution event in fixture');
+
+  const failedContribution: RpcEvent = {
+    ...contribution,
+    id: 'test-failed-event-id',
+    successful: false,
+  };
+  const { events, rejected } = decodeChainEvents([failedContribution, ...allEvents]);
+
+  assertEquals(rejected.length, 1);
+  assertEquals(rejected[0]?.eventId, 'test-failed-event-id');
+  assertEquals(rejected[0]?.reason.includes('unsuccessful contract call'), true);
+  assertEquals(events.length, allEvents.length);
+});
+
+Deno.test('an event with missing or non-true successful flag is rejected', () => {
+  const contribution = groupEvents.find((e) => decodeOk(e).name === 'contribution');
+  if (contribution === undefined) throw new Error('no contribution event in fixture');
+
+  const missingSuccessful = { ...contribution } as unknown as RpcEvent;
+  delete (missingSuccessful as Record<string, unknown>)['successful'];
+
+  const result = decodeChainEvent(missingSuccessful);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.reason.includes('unsuccessful contract call'), true);
+  }
 });
