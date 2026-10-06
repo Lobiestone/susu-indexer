@@ -5,6 +5,7 @@ import {
   computeLedgerRange,
   ledgerLag,
 } from '../supabase/functions/_shared/checkpoint.ts';
+import { IndexerDb } from '../supabase/functions/_shared/db.ts';
 
 function checkpoint(lastProcessedLedger: number, startLedger = 1): Checkpoint {
   return { lastProcessedLedger, startLedger, updatedAt: '2026-08-01T00:00:00.000Z' };
@@ -176,4 +177,143 @@ Deno.test('ledgerLag reports the distance from the chain tip', () => {
 
 Deno.test('ledgerLag never reports a negative lag', () => {
   assertEquals(ledgerLag(checkpoint(110), 100), 0);
+});
+
+// ---------------------------------------------------------------------------
+// Database Checkpoint Persistence
+// ---------------------------------------------------------------------------
+
+Deno.test('advanceCheckpoint leaves higher ledger when two runs write in reverse order', async () => {
+  type CheckpointRow = {
+    id: string;
+    last_processed_ledger: number;
+    start_ledger: number;
+    updated_at: string;
+  };
+
+  const state: { row: CheckpointRow | null } = { row: null };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((urlInput: string | URL | Request, init?: RequestInit) => {
+    const urlStr = typeof urlInput === 'string'
+      ? urlInput
+      : urlInput instanceof URL
+      ? urlInput.href
+      : urlInput.url;
+    const url = new URL(urlStr);
+    const method = init?.method ?? (urlInput instanceof Request ? urlInput.method : 'GET');
+    const bodyStr = String(init?.body ?? '{}');
+
+    if (url.pathname.endsWith('/indexer_checkpoints')) {
+      if (method === 'PATCH') {
+        const body = JSON.parse(bodyStr) as Partial<CheckpointRow>;
+        const idCond = url.searchParams.get('id');
+        const ltMatch = url.searchParams.get('last_processed_ledger')?.match(/^lt\.(\d+)$/);
+        const ltVal = ltMatch?.[1] ? Number.parseInt(ltMatch[1], 10) : null;
+
+        if (
+          state.row !== null &&
+          idCond === 'eq.default' &&
+          ltVal !== null &&
+          state.row.last_processed_ledger < ltVal
+        ) {
+          state.row = { ...state.row, ...body };
+          return Promise.resolve(
+            new Response(JSON.stringify([{ id: 'default' }]), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+
+      if (method === 'POST') {
+        const body = JSON.parse(bodyStr) as CheckpointRow;
+        const onConflict = url.searchParams.get('on_conflict');
+        if (onConflict === 'id') {
+          // Unconditional upsert (the buggy old behavior)
+          state.row = { ...body };
+          return Promise.resolve(
+            new Response(JSON.stringify([state.row]), {
+              status: 201,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+
+        if (state.row !== null && state.row.id === body.id) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "indexer_checkpoints_pkey"',
+                details: 'Key (id)=(default) already exists.',
+              }),
+              {
+                status: 409,
+                headers: { 'content-type': 'application/json' },
+              },
+            ),
+          );
+        }
+
+        state.row = { ...body };
+        return Promise.resolve(
+          new Response(JSON.stringify(state.row), {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+
+      if (method === 'GET') {
+        if (state.row) {
+          return Promise.resolve(
+            new Response(JSON.stringify(state.row), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(null), {
+            status: 406,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+    }
+
+    return Promise.resolve(new Response('not found', { status: 404 }));
+  }) as typeof fetch;
+
+  try {
+    const db = new IndexerDb('https://example.supabase.co', 'dummy-key');
+
+    // Run 1 writes higher ledger (200)
+    await db.advanceCheckpoint({ lastProcessedLedger: 200, startLedger: 1 });
+    assertEquals(state.row?.last_processed_ledger, 200);
+
+    // Run 2 (out of order / stale) writes lower ledger (180)
+    await db.advanceCheckpoint({ lastProcessedLedger: 180, startLedger: 1 });
+
+    // The higher ledger (200) must remain!
+    assertEquals(state.row?.last_processed_ledger, 200);
+
+    // Writing equal ledger (200) is also a no-op
+    await db.advanceCheckpoint({ lastProcessedLedger: 200, startLedger: 1 });
+    assertEquals(state.row?.last_processed_ledger, 200);
+
+    // Writing strictly higher ledger (250) advances the checkpoint
+    await db.advanceCheckpoint({ lastProcessedLedger: 250, startLedger: 1 });
+    assertEquals(state.row?.last_processed_ledger, 250);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

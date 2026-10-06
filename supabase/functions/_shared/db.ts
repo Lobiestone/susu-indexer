@@ -359,20 +359,57 @@ export class IndexerDb {
     lastProcessedLedger: number;
     startLedger: number;
   }): Promise<void> {
-    const { error } = await this.#client
+    const { data: updated, error: updateError } = await this.#client
       .from('indexer_checkpoints')
-      .upsert(
-        {
-          id: 'default',
-          last_processed_ledger: params.lastProcessedLedger,
-          start_ledger: params.startLedger,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'id' },
-      );
+      .update({
+        last_processed_ledger: params.lastProcessedLedger,
+        start_ledger: params.startLedger,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', 'default')
+      .lt('last_processed_ledger', params.lastProcessedLedger)
+      .select('id');
 
-    if (error) {
-      throw new Error(`Failed to advance indexer checkpoint: ${error.message}`);
+    if (updateError) {
+      throw new Error(`Failed to advance indexer checkpoint: ${updateError.message}`);
+    }
+
+    if (updated && updated.length > 0) {
+      return;
+    }
+
+    const { error: insertError } = await this.#client
+      .from('indexer_checkpoints')
+      .insert({
+        id: 'default',
+        last_processed_ledger: params.lastProcessedLedger,
+        start_ledger: params.startLedger,
+        updated_at: new Date().toISOString(),
+      });
+
+    if (insertError) {
+      const isUniqueViolation = insertError.code === '23505' ||
+        insertError.message?.includes('duplicate key') ||
+        insertError.message?.includes('unique constraint');
+
+      if (isUniqueViolation) {
+        const { error: retryError } = await this.#client
+          .from('indexer_checkpoints')
+          .update({
+            last_processed_ledger: params.lastProcessedLedger,
+            start_ledger: params.startLedger,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', 'default')
+          .lt('last_processed_ledger', params.lastProcessedLedger);
+
+        if (retryError) {
+          throw new Error(`Failed to advance indexer checkpoint: ${retryError.message}`);
+        }
+        return;
+      }
+
+      throw new Error(`Failed to advance indexer checkpoint: ${insertError.message}`);
     }
   }
 
