@@ -22,7 +22,7 @@
 
 import { authorizeInvocation } from '../_shared/auth.ts';
 import { canAdvanceCheckpoint, computeLedgerRange, ledgerLag } from '../_shared/checkpoint.ts';
-import { loadConfig } from '../_shared/config.ts';
+import { type IndexerConfig, loadConfig } from '../_shared/config.ts';
 import { type IndexedEventRow, IndexerDb } from '../_shared/db.ts';
 import { decodeChainEvents } from '../_shared/decode.ts';
 import { discoverGroups } from '../_shared/discovery.ts';
@@ -114,7 +114,9 @@ export async function handleRequest(
   const correlationId = crypto.randomUUID();
   const logger = createLogger(correlationId);
 
-  const configResult = loadConfig();
+  const configResult = (deps && 'config' in deps && deps.config)
+    ? { ok: true as const, config: deps.config }
+    : loadConfig();
   if (!configResult.ok) {
     // Report which variables are problematic — never their values.
     const reason = `invalid configuration (missing: ${
