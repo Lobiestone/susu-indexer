@@ -252,7 +252,8 @@ Deno.test('advanceCheckpoint leaves higher ledger when two runs write in reverse
             new Response(
               JSON.stringify({
                 code: '23505',
-                message: 'duplicate key value violates unique constraint "indexer_checkpoints_pkey"',
+                message:
+                  'duplicate key value violates unique constraint "indexer_checkpoints_pkey"',
                 details: 'Key (id)=(default) already exists.',
               }),
               {
