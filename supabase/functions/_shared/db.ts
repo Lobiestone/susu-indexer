@@ -47,10 +47,16 @@ export type IndexedEventRow = {
 export class IndexerDb {
   #client: SupabaseClient;
 
+  /**
+   * An explicit client may be injected for tests, so the orchestration can be
+   * exercised against a stub instead of a live database. Production callers
+   * omit it and get the service-role client as before.
+   */
   constructor(supabaseUrl: string, serviceRoleKey: string, client?: SupabaseClient) {
-    this.#client = client ?? createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
+    this.#client = client ??
+      createClient(supabaseUrl, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
   }
 
   /**
